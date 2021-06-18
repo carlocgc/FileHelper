@@ -3,16 +3,34 @@
 #include <iostream>
 #include <filesystem>
 
+// example command line args(P:\Artbooks -e "cbz" -r " - Satoshi Urushihara")
+
 #define LOG(value, args) std::cout << value << std::endl
 
 namespace po = boost::program_options;
 namespace fs = std::filesystem;
 
-struct TargetData
+const size_t MAX_PATH = 260;
+
+struct TargetDetails
 {
 	fs::path RootDirectory;
 	std::string FileExtension;
 };
+
+void PrintPerms(fs::perms p)
+{
+	std::cout << ((p & fs::perms::owner_read) != fs::perms::none ? "r" : "-")
+		<< ((p & fs::perms::owner_write) != fs::perms::none ? "w" : "-")
+		<< ((p & fs::perms::owner_exec) != fs::perms::none ? "x" : "-")
+		<< ((p & fs::perms::group_read) != fs::perms::none ? "r" : "-")
+		<< ((p & fs::perms::group_write) != fs::perms::none ? "w" : "-")
+		<< ((p & fs::perms::group_exec) != fs::perms::none ? "x" : "-")
+		<< ((p & fs::perms::others_read) != fs::perms::none ? "r" : "-")
+		<< ((p & fs::perms::others_write) != fs::perms::none ? "w" : "-")
+		<< ((p & fs::perms::others_exec) != fs::perms::none ? "x" : "-")
+		<< '\n';
+}
 
 int main(int argc, char* argv[])
 {
@@ -30,17 +48,17 @@ int main(int argc, char* argv[])
 	po::store(po::command_line_parser(argc, argv).options(desc).positional(p_desc).run(), vm);
 	po::notify(vm);
 
-	//if (vm.count("help"))
-	//{
-	//	std::cout << "Command line options:" << '\n';
-	//	std::cout << "-h [--help]                   : display options" << '\n';
-	//	std::cout << "-d [--dir] args               : target directory" << '\n';
-	//	std::cout << "-e [--extension] args         : target file extension" << '\n';
-	//	std::cout << "-r [--remove] args            : remove a sub string from file names" << '\n';
-	//	return 0;
-	//}
+	if (vm.count("help"))
+	{
+		std::cout << "Command line options:" << '\n';
+		std::cout << "-h [--help]                   : display options" << '\n';
+		std::cout << "-d [--dir] args               : target directory" << '\n';
+		std::cout << "-e [--extension] args         : target file extension" << '\n';
+		std::cout << "-r [--remove] args            : remove a sub string from file names" << '\n';
+		return 0;
+	}
 
-	TargetData target;
+	TargetDetails target;
 
 	// Get Target Directory	
 
@@ -77,7 +95,7 @@ int main(int argc, char* argv[])
 		{
 			target.FileExtension.insert(0, 1, '.');
 		}
-		
+
 		LOG("Target Extension: " << target.FileExtension);
 	}
 	else
@@ -98,16 +116,14 @@ int main(int argc, char* argv[])
 			continue;
 		}
 
-		LOG(p.path().extension());
-
 		if (target.FileExtension.empty() || p.path().extension() == target.FileExtension)
 		{
 			file_paths.push_back(p);
-			LOG(p.path().string());
+			LOG("Found: " << p.path().string());
 		}
 	}
 
-	LOG("Found " << file_paths.size() << "files");
+	LOG("File Count: " << file_paths.size());
 
 	// Edit Files
 
@@ -115,17 +131,77 @@ int main(int argc, char* argv[])
 	{
 		const auto remove_str = vm["remove"].as<std::string>();
 
-		for (auto const& file_path : file_paths)
+		for (fs::path const& current_path : file_paths)
 		{
-			if (size_t index = file_path.string().find(remove_str))
+			if (current_path.string().size() > MAX_PATH)
 			{
-				const auto new_name = file_path.string().erase(index, remove_str.size());
+				LOG("Error: file path too long to rename (260 character limit)! - " << current_path);
+				continue;
+			}
 
-				fs::rename(file_path, new_name);
+			// calculate new file name and path
+			auto new_path = current_path;
 
-				if(fs::exists(new_name))
+			int index = new_path.string().find(remove_str);
+
+			if (index < 0)
+			{
+				// file does not contain unwanted string
+				continue;
+			}
+			
+			while (index >= 0)
+			{
+				new_path = new_path.string().erase(index, remove_str.size());
+
+				index = new_path.string().find(remove_str);
+			}
+
+			if (new_path.empty() || new_path.filename().empty())
+			{
+				LOG("Error: Cannot rename a file to have no name or path - " << current_path);
+				continue;
+			}
+
+			// create new directory
+			auto new_directory = new_path;
+			new_directory.remove_filename();
+
+			if (!fs::exists(new_directory))
+			{
+				fs::create_directories(new_directory);
+				fs::permissions(new_directory, fs::perms::all);
+			}
+
+			// rename file
+			try
+			{
+				LOG("Attempting Rename: " << current_path << " -> " << new_path);
+				fs::rename(current_path, new_path);				
+			}
+			catch (const std::exception& e)
+			{
+				LOG("Failed: " << e.what());
+				break;
+			}
+
+			LOG("Success!");
+
+			if (fs::exists(new_path))
+			{				
+				auto old_path = current_path;
+				old_path.remove_filename();
+				
+				if (fs::exists(old_path))
 				{
-					//fs::remove(file_path);
+					try
+					{
+						fs::remove(old_path);
+					}
+					catch (std::exception const& e)
+					{
+						LOG("Error cleaning up: " << e.what());
+					}				
 				}				
 			}
 		}
