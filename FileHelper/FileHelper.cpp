@@ -5,7 +5,7 @@
 
 // example command line args(P:\Artbooks -e "cbz" -r " - Satoshi Urushihara")
 
-#define LOG(value, args) std::wcout << value << std::endl
+#define LOG(message) std::wcout << message << std::endl
 
 namespace po = boost::program_options;
 namespace fs = std::filesystem;
@@ -91,7 +91,8 @@ int wmain(int argc, wchar_t* argv[])
 	{
 		target.FileExtension = vm["extension"].as<std::wstring>();
 
-		if (target.FileExtension.rfind('.', 0) != 0) // add '.' to extension
+		// add '.' to extension if missing
+		if (target.FileExtension.rfind('.', 0) != 0)
 		{
 			target.FileExtension.insert(0, 1, '.');
 		}
@@ -100,14 +101,14 @@ int wmain(int argc, wchar_t* argv[])
 	}
 	else
 	{
-		LOG("No file extension specified...");
+		LOG("No file extension specified, parsing all files.");
 	}
 
-	// Get File Names To Edit
+	// Get all files
 
 	std::vector<fs::path> file_paths;
 
-	LOG("Searching for files...");
+	LOG("Starting search for files...");
 
 	for (auto const& p : fs::recursive_directory_iterator(target.RootDirectory))
 	{
@@ -115,43 +116,44 @@ int wmain(int argc, wchar_t* argv[])
 		{
 			continue;
 		}
-		
+
 		if (target.FileExtension.empty() || p.path().extension() == target.FileExtension)
 		{
-			file_paths.push_back(p);			
+			file_paths.push_back(p);
+			LOG(p.path().wstring());
 		}
 	}
 
-	LOG("File Count: " << file_paths.size());
+	LOG("Files Found: " << file_paths.size());
 
 	// Edit Files
 
 	if (vm.count("remove"))
 	{
 		const auto remove_str = vm["remove"].as<std::wstring>();
-		
+
+		LOG("Removing \"" << remove_str << "\" from file paths");
 
 		for (fs::path const& current_path : file_paths)
 		{
 			if (current_path.wstring().size() > MAX_PATH)
 			{
-				LOG("Error: file path too long to rename (260 character limit)! - " << current_path);
+				LOG("Error: file path too long (260 character limit)! - " << current_path);
 				continue;
 			}
-
-			// calculate new file name and path
+			
 			auto new_path = current_path;
-
 			int index = new_path.wstring().find(remove_str);
 
 			if (index < 0)
 			{
 				// file does not contain unwanted string
+				LOG("Skipped: Rename not required - " << new_path.wstring());
 				continue;
 			}
-			
-			while (index >= 0)
-			{
+
+			while (index >= 0) // remove all substring occurrences
+			{				
 				new_path = new_path.wstring().erase(index, remove_str.size());
 
 				index = new_path.wstring().find(remove_str);
@@ -159,7 +161,7 @@ int wmain(int argc, wchar_t* argv[])
 
 			if (new_path.empty() || new_path.filename().empty())
 			{
-				LOG("Error: Cannot rename a file to have no name or path - " << current_path);
+				LOG("Error: Cannot rename a file to have no name - " << current_path);
 				continue;
 			}
 
@@ -176,7 +178,7 @@ int wmain(int argc, wchar_t* argv[])
 				}
 				catch (std::exception const& e)
 				{
-					LOG("Failed creating directory: " << e.what());
+					LOG("Failed: Cannot create directory - " << e.what());
 					continue;
 				}
 			}
@@ -184,33 +186,35 @@ int wmain(int argc, wchar_t* argv[])
 			// rename file
 			try
 			{
-				LOG("Attempting Rename: " << current_path << " -> " << new_path);
-				fs::rename(current_path, new_path);				
+				LOG("Removing substring: " << current_path << " -> " << new_path);
+				fs::rename(current_path, new_path);
 			}
 			catch (const std::exception& e)
 			{
-				LOG("Failed renaming file: " << e.what());
-				continue;;
+				LOG("Failed: Cannot rename file - " << e.what());
+				continue;
 			}
 
 			LOG("Success!");
 
 			if (fs::exists(new_path))
-			{				
+			{
 				auto old_path = current_path;
 				old_path.remove_filename();
 				
 				if (fs::exists(old_path))
 				{
+					// remove old directory
 					try
 					{
 						fs::remove(old_path);
 					}
 					catch (std::exception const& e)
 					{
-						LOG("Failed cleaning up: " << e.what());
-					}				
-				}				
+						LOG("Error: Could not clean up - " << e.what());
+						continue;
+					}
+				}
 			}
 		}
 	}
